@@ -1,6 +1,6 @@
 'use client';
 
-import { userOrderExists } from '@/app/actions/orders';
+import { createPaymentIntent } from '@/actions/orders';
 import { Button } from '@/components/ui/button';
 import {
 	Card,
@@ -36,12 +36,11 @@ type CheckoutFormProps = {
 		description: string;
 	};
 	discountCode?: { id: string; discountAmount: number; discountType: DiscountCodeType };
-	clientSecret: string;
 };
 
 const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLIC_KEY as string);
 
-export function CheckoutForm({ product, clientSecret, discountCode }: CheckoutFormProps) {
+export function CheckoutForm({ product, discountCode }: CheckoutFormProps) {
 	const amount =
 		discountCode == null
 			? product.priceInCents
@@ -67,12 +66,8 @@ export function CheckoutForm({ product, clientSecret, discountCode }: CheckoutFo
 					<div className='line-clamp-3 text-muted-foreground'>{product.description}</div>
 				</div>
 			</div>
-			<Elements options={{ clientSecret }} stripe={stripePromise}>
-				<Form
-					priceInCents={product.priceInCents}
-					productId={product.id}
-					discountCode={discountCode}
-				/>
+			<Elements options={{ amount, mode: 'payment', currency: 'usd' }} stripe={stripePromise}>
+				<Form priceInCents={amount} productId={product.id} discountCode={discountCode} />
 			</Elements>
 		</div>
 	);
@@ -105,13 +100,18 @@ function Form({
 
 		setIsLoading(true);
 
-		const orderExists = await userOrderExists(email, productId);
+		const formSubmit = await elements.submit();
 
-		if (orderExists) {
-			setErrorMessage(
-				'You have already purchased this product. Try downloading it from the My Orders page'
-			);
+		if (formSubmit.error != null) {
+			setErrorMessage(formSubmit.error.message);
+			setIsLoading(false);
+			return;
+		}
 
+		const paymentIntent = await createPaymentIntent(email, productId, discountCode?.id);
+
+		if (paymentIntent.error != null) {
+			setErrorMessage(paymentIntent.error);
 			setIsLoading(false);
 			return;
 		}
@@ -119,6 +119,7 @@ function Form({
 		stripe
 			.confirmPayment({
 				elements,
+				clientSecret: paymentIntent.clientSecret,
 				confirmParams: {
 					return_url: `${process.env.NEXT_PUBLIC_SERVER_URL}/stripe/purchase-success`,
 				},
